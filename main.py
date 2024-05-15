@@ -9,6 +9,10 @@ import pymorphy2
 import gc
 import joblib
 import tensorflow as tf
+import re
+import requests
+import torch
+from transformers import BertTokenizer, BertModel
 import pathlib
 import sys
 sys.stdout.reconfigure(encoding='utf-8')
@@ -18,6 +22,17 @@ app = FastAPI()
 
 @app.get("/neuro/get-class")
 async def root(plainText: str = Body(..., embed=True)):
+    # Загрузка предварительно обученной модели BERT
+    tokenizer_bert = BertTokenizer.from_pretrained('bert-base-uncased')
+    model_bert = BertModel.from_pretrained('bert-base-uncased')
+
+    # Функция для преобразования текста в эмбеддинги BERT
+    def get_bert_embeddings(text):
+        inputs = tokenizer_bert(text, return_tensors='pt', padding=True, truncation=True, max_length=256)
+        outputs = model_bert(**inputs)
+        embeddings = outputs.last_hidden_state.mean(dim=1)
+        return embeddings.detach().numpy()
+
     # Функиця для загрузки модели
     def load_model(model_file):
         model = tf.keras.models.load_model(model_file)
@@ -25,12 +40,19 @@ async def root(plainText: str = Body(..., embed=True)):
 
     # Функция для предобработки текста
     def preprocess_text(text):
-        # Токенизация текста
+        text = re.sub(r'\d', '', str(text))  # Удаление цифр
+        text = re.sub(r'[^\w\s]', '', text)  # Удаление символов, кроме букв и пробелов
         tokens = nltk.word_tokenize(text.lower())
-        # Удаление стоп-слов и пунктуации, а также приведение слов к начальной форме
-        tokens = [morph.parse(word)[0].normal_form for word in tokens if word.isalnum() and word not in stop_words]
-        transformed_data = loaded_vectorizer.transform([' '.join(tokens)])
-        return transformed_data
+        stop_words_ru = set(stopwords.words('russian'))
+        stop_words_en = set(stopwords.words('english'))
+        text = ' '.join(tokens)  # Объединение токенов в строку
+        if any(char.isalpha() for char in text):  # Проверка на наличие букв в тексте
+            stop_words = stop_words_ru if all(char.isalpha() or char.isspace() for char in text) else stop_words_en
+            tokens = [morph.parse(word)[0].normal_form for word in tokens if word not in stop_words]
+        else:  # Если текст состоит только из символов, пропускаем его без предобработки
+            tokens = []
+        print(tokens)
+        return np.vstack(get_bert_embeddings(' '.join(tokens)))
 
     classes = {
         0: 'Разрешенный контент',
@@ -47,18 +69,14 @@ async def root(plainText: str = Body(..., embed=True)):
         12: 'Росздравнадзор',
     }
 
-    model = load_model(pathlib.Path('./kaggle/working/fnn_model.h5'))  # Заменить на путь до модели
-    loaded_vectorizer = joblib.load('./tfidf_vectorizer.pkl')  # Заменить на путь до векторизатора
+    model = load_model(pathlib.Path('./kaggle/working/bertv2_fnn_model.h5'))  # Заменить на путь до модели
 
     nltk.download('punkt')
-    # Загрузка стоп-слов
-    nltk.download('stopwords')
-    stop_words = set(stopwords.words('russian'))
-    morph = pymorphy2.MorphAnalyzer()
+    # Инициализация стоп-слов
 
-    text = preprocess_text(plainText)  # То что в скобках, заменить на любой текст
-    model_predict = model.predict(text)
-    pred_fnn = np.argmax(model_predict, axis=-1)
-    text_class = classes[pred_fnn[0]]
-    print(f'Текст относится к классу: {text_class}')
-    return {"class": str(text_class)}
+    morph = pymorphy2.MorphAnalyzer()
+    text = preprocess_text(plainText)
+    pred_fnn = np.argmax(model.predict(text), axis=-1)
+    print(f'Текст относится к классу: {classes[pred_fnn[0]]}')
+
+    return {"class": str(classes[pred_fnn[0]])}
