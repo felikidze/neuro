@@ -69,7 +69,7 @@ async def root(plainText: str = Body(..., embed=True)):
         12: 'Росздравнадзор',
     }
 
-    model = load_model(pathlib.Path('./kaggle/working/bertv2_fnn_model.h5'))  # Заменить на путь до модели
+    model = load_model(pathlib.Path('./kaggle/working/bertv2_fnn_model.h5'))
 
     nltk.download('punkt')
     # Инициализация стоп-слов
